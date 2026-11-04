@@ -1,6 +1,6 @@
 # Kill the Prez — Design Specification
 
-**Status:** Draft for user review  
+**Status:** Approved for implementation planning
 **Date:** 2026-11-04  
 **Project:** Kill the Prez
 
@@ -8,7 +8,7 @@
 
 Build a browser-based, phone-connected party game in the Secret Hitler social-deduction tradition. The first release is a faithful, noncommercial adaptation of the core rules, re-themed as fictional political satire: the Prez's faction advances voter-suppression policies while the Opposition tries to enact safeguards or stop the Prez. One shared display shows public information; each player uses a phone for private role information, voting, and actions.
 
-The server foundation should also be reusable for future turn-based social-deduction and party games. Use `boardgame.io` as the game-state and multiplayer foundation instead of implementing the networking layer from scratch. Develop and test locally first; public hosting is a later step.
+The server foundation should also be reusable for future turn-based social-deduction and party games. Use Colyseus for authoritative rooms, multiplayer connections, matchmaking, and state synchronization; implement a small reusable game-module layer for turn/phase rules. Develop and test locally first; public hosting is a later step.[15][16]
 
 ## Goals and success criteria
 
@@ -33,7 +33,7 @@ The setting is an unnamed, fictional political republic that feels familiar to A
 
 ## Base rules and win conditions
 
-The base game follows the attached Secret Hitler rulebook's core rules and player-count setup. The political wording changes, but the underlying thresholds and sequence remain unchanged.[2]
+The base game follows the attached Secret Hitler rulebook's core rules and player-count setup. The political wording changes, but the underlying thresholds and sequence remain unchanged.[32]
 
 - The Prez's faction wins by enacting six voter-suppression policies, or by electing The Prez as Cabinet Nominee after at least three voter-suppression policies have been enacted.
 - The Opposition wins by enacting five safeguard laws or by assassinating The Prez.
@@ -41,7 +41,7 @@ The base game follows the attached Secret Hitler rulebook's core rules and playe
 - Legislative sessions retain secret policy selection: the Speaker privately sees three policies and discards one; the Cabinet Nominee privately sees two and enacts one. Discarded policies remain hidden.
 - The veto power activates at the same policy-track threshold as the original rules.
 - When policies unlock executive powers, the sitting Speaker may use the available power regardless of faction. The power to assassinate is fictional and non-graphic; if its target is The Prez, the Opposition wins. If another player is targeted, do not reveal that player's faction.
-- An investigation reveals only the target's party/faction affiliation to the Speaker, not the target's secret role or whether they are The Prez. It is private; a player may share or lie about the result, and the same player cannot be investigated twice.[2]
+- An investigation reveals only the target's party/faction affiliation to the Speaker, not the target's secret role or whether they are The Prez. It is private; a player may share or lie about the result, and the same player cannot be investigated twice.[32]
 - Guided setup replaces the physical pass-the-envelope and eyes-closed role-recognition process. The official role distribution and private information rules are retained.
 
 ## Player experience and screens
@@ -63,21 +63,21 @@ Each phone shows only that player's permitted information: role/faction, role-sp
 
 ### Investigation
 
-When the Speaker investigates a player, the Speaker's phone privately displays the target's faction only. The public display and target's phone receive no investigation result. The Speaker can disclose or misrepresent the finding verbally, matching the source rules.[2]
+When the Speaker investigates a player, the Speaker's phone privately displays the target's faction only. The public display and target's phone receive no investigation result. The Speaker can disclose or misrepresent the finding verbally, matching the source rules.[32]
 
 ## Reusable server architecture
 
-Use `boardgame.io` as the shared turn-based game server foundation:
+Use Colyseus as the shared Node.js multiplayer foundation, with a deliberately small game-module contract:
 
-- One server registers multiple game definitions; **Kill the Prez** is the first game module.[12][18]
-- Each game module owns its setup, role distribution, phases, legal moves, policy transitions, powers, and win conditions.
-- The shared web application owns the reusable room-creation/join flow, friendly room-code/QR experience, display-name entry, shared-display shell, and phone-controller shell.
-- Game state is authoritative on the server. Player-specific views strip hidden information before state is sent to a client.[11][12]
-- Use multi-player stages to collect simultaneous ballots and reveal them only after all ballots are locked.[17]
-- Use generated, private seat credentials for accountless move authorization and reconnect. Do not put secrets in room codes or public URLs.
-- Keep game-specific rules modular, but do not build an expansion marketplace or a generic plugin system in v1.
+- A shared room/server layer owns room lifecycle, seat assignment, connection state, display names, invite-code lookup, host handoff, and common client synchronization.
+- Each game module owns setup, roles, phases, legal commands, policy transitions, powers, win conditions, and the projection of game data that each client may see. **Kill the Prez** is the first module; later games can reuse the room shell without building a generic plugin marketplace.
+- Colyseus rooms are authoritative: validate every player command on the server, then publish the resulting state to clients.[15][16]
+- Use Colyseus `StateView` or an explicit private-message path for player-only information. By default the full synchronized state is visible, so private roles, policy hands, and investigations must never be placed in an unfiltered shared view.[20]
+- Collect ballots as private commands in server state; do not publish individual choices until every ballot is locked, then publish the complete result.
+- Use the room's reconnection-token flow for accountless same-seat reconnect. Keep each token on that player's device; never place it in the room code, QR URL, or shared display.[17]
+- Keep game-specific rules modular, but do not build an expansion marketplace or an elaborate general-purpose game engine in v1.
 
-The framework's default storage is in memory. This matches the no-history MVP; a server process restart ends active rooms.[18] The exact human-readable room-code and reconnect adapter must be validated during implementation rather than assumed to be supplied turnkey by the framework.
+Colyseus's default `LocalDriver` keeps room lookup data in memory, and this MVP does not persist match state. A server process restart therefore ends active rooms.[19] Generate a human-friendly invite code in the application layer and map it to an opaque private room ID; validate the exact room-visibility and reconnection behavior against the pinned Colyseus version during implementation.[18]
 
 ## Privacy, room lifecycle, and failures
 
@@ -86,7 +86,7 @@ The framework's default storage is in memory. This matches the no-history MVP; a
 - Rooms are private and unlisted; joining requires a room code or QR invitation. There is no public room browser.
 - Keep live game state in memory only. Closing or abandoning a room removes it; do not save match history.
 - On a player disconnect, pause the game at the current required decision and let the same seat reconnect with its private credential. The host may abandon/restart if the player does not return.
-- If the room creator disconnects and does not return after a short grace period, transfer room controls to another connected player. The original creator may reconnect as a normal player.
+- If the room creator disconnects and does not return after a short grace period, transfer room controls to another connected player. The original creator may reconnect as a normal player. This host handoff is application game logic, separate from Colyseus room ownership.
 - A server restart ends active rooms; the MVP does not recover in-progress games.
 - Invalid or expired room codes and rejected moves must produce clear, non-sensitive error messages.
 
@@ -110,7 +110,7 @@ The framework's default storage is in memory. This matches the no-history MVP; a
 
 ## Licensing and attribution
 
-This is a direct, noncommercial adaptation of Secret Hitler. The official site identifies the game as CC BY-NC-SA 4.0 and requires attribution, noncommercial use, and share-alike for adaptations; it also says app-store submission requires approval.[1] Before public distribution, include appropriate attribution and licensing notices and confirm the permitted scope of the software adaptation. This specification is not legal advice.
+This is a direct, noncommercial adaptation of Secret Hitler. The official site identifies the game as CC BY-NC-SA 4.0 and requires attribution, noncommercial use, and share-alike for adaptations; it also says app-store submission requires approval.[31] Before public distribution, include appropriate attribution and licensing notices and confirm the permitted scope of the software adaptation. This specification is not legal advice.
 
 ## Verification plan
 
@@ -127,13 +127,15 @@ This is a direct, noncommercial adaptation of Secret Hitler. The official site i
 - Name-length limit and duplicate-name behavior (reject or add a disambiguating suffix).
 - Exact reconnect grace period and idle-room expiration.
 - Hosting provider and cost, selected only after local testing.
-- Confirm `boardgame.io`'s lobby behavior is sufficient for the desired room-code flow; add a thin adapter if needed.
+- Confirm Colyseus private-room visibility and reconnect tokens against the selected version; keep the invite-code-to-room-ID mapping application-owned.
 
 ## Sources
 
-[1] Secret Hitler official site and licensing FAQ: https://www.secrethitler.com/  
-[2] Secret Hitler official rulebook: https://www.secrethitler.com/assets/Secret_Hitler_Rules.pdf  
-[11] boardgame.io secret state: https://boardgame.io/documentation/secret-state.html  
-[12] boardgame.io multiplayer and multiple game definitions: https://boardgame.io/documentation/multiplayer  
-[17] boardgame.io stages and multiple active players: https://boardgame.io/documentation/stages.html  
-[18] boardgame.io server, multiple game definitions, and in-memory default storage: https://boardgame.io/documentation/api/Server.html
+[15] https://docs.colyseus.io
+[16] https://docs.colyseus.io/room
+[17] https://docs.colyseus.io/room/reconnection
+[18] https://docs.colyseus.io/matchmaker
+[19] https://docs.colyseus.io/server/driver
+[20] https://docs.colyseus.io/state/view
+[31] https://www.secrethitler.com
+[32] https://www.secrethitler.com/assets/Secret_Hitler_Rules.pdf
